@@ -20,22 +20,60 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import gobject
-import totem
+from gi.repository import GObject
+from gi.repository import Gio
+from gi.repository import Totem
+from gi.repository import Peas
+
+import sys
 import platform
 import time
 from AirPlayService import AirPlayService
 
-class AirPlayPlugin (totem.Plugin):
+def _get_dbus_proxy():
+	return Gio.DBusProxy.new_for_bus_sync(Gio.BusType.SESSION,
+		Gio.DBusProxyFlags.NONE, None,
+		"org.freedesktop.DBus",
+		"/org/freedesktop/DBus",
+		"org.freedesktop.DBus", None)
+
+class AirPlayPlugin (GObject.GObject, Peas.Activatable):
+	__gobject_name__ = 'AirPlayPlugin'
+	
+	object = GObject.property(type = GObject.GObject)
+
 	def __init__ (self):
-		totem.Plugin.__init__ (self)
 		self.totem = None
 
-	def activate (self, totem_object):
-		self.service = AirPlayTotemPlayer(totem=totem_object,name="Totem on %s" % (platform.node()))
+	def do_activate (self):
+		self.monitor_bus()
+		try:
+			self.construct()
+		except:
+			print >> sys.stderr, "Failed activating airplay"
+			return
+		
 
-	def deactivate (self, totem_object):
-		self.service.__del__()
+	def monitor_bus(self):
+		dbusobj = _get_dbus_proxy()
+		dbusobj.connect("g-signal", self.on_dbus_signal)
+	
+	def on_dbus_signal(self, proxy, sender_name, signal_name, params):
+		if signal_name == "NameOwnerChanged":
+			name, old_owner, new_owner = params.unpack()
+			if name == DBUS_DVB_SERVICE:
+				if old_owner == "": 
+					self.construct()
+				elif new_owner == "": 
+					self.deactivate()
+	def construct(self):
+		self.totem_object = self.object
+		self.service = AirPlayTotemPlayer(
+		    totem=self.totem_object,
+		    name="Totem on %s" % (platform.node()))
+
+	def do_deactivate (self):
+		self.service = None
 
 class AirPlayTotemPlayer(AirPlayService):
 	def __init__(self, totem, name=None, host="0.0.0.0", port=22555):
@@ -60,7 +98,7 @@ class AirPlayTotemPlayer(AirPlayService):
 	# this must seek to a certain time
 	def set_scrub(self, position):
 		if self.totem.is_seekable():
-			gobject.idle_add(self.totem.action_seek_time, int(float(position) * 1000), False)
+			GObject.idle_add(self.totem.action_seek_time, int(float(position) * 1000), False)
 
 	# this only sets the location and start position, it does not yet start to play
 	def play(self, location, position):
@@ -69,7 +107,7 @@ class AirPlayTotemPlayer(AirPlayService):
 
 	# stop the playback completely
 	def stop(self, info):
-		gobject.idle_add(self.totem.action_stop)
+		GObject.idle_add(self.totem.action_stop)
 
 	# reverse HTTP to PTTH
 	def reverse(self, info):
@@ -81,7 +119,7 @@ class AirPlayTotemPlayer(AirPlayService):
 			if self.location is not None:
 				timeout = 5
 				# start playback and loading of media
-				gobject.idle_add(self.totem.add_to_playlist_and_play, self.location[0], "AirPlay Video", False)
+				GObject.idle_add(self.totem.add_to_playlist_and_play, self.location[0], "AirPlay Video", False)
 				# wait until stream-length is loaded and is not zero
 				duration = 0
 				while (int(duration) == 0 and timeout > 0):
@@ -96,10 +134,10 @@ class AirPlayTotemPlayer(AirPlayService):
 					self.set_scrub(targetoffset)
 
 			if (not self.totem.is_playing()):
-				gobject.idle_add(self.totem.action_play)
+				GObject.idle_add(self.totem.action_play)
 
 			del self.location
 			self.location = None
 		else:
-			gobject.idle_add(self.totem.action_pause)
+			GObject.idle_add(self.totem.action_pause)
 
